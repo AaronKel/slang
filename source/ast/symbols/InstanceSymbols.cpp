@@ -30,6 +30,7 @@
 #include "slang/diagnostics/ParserDiags.h"
 #include "slang/syntax/AllSyntax.h"
 #include "slang/util/TimeTrace.h"
+#include "slang/text/CharInfo.h"
 #include "slang/util/TypeTraits.h"
 
 namespace {
@@ -68,6 +69,7 @@ public:
                                         implicitNets);
 
         path.clear();
+        indices.clear();
 
         if (!syntax.decl) {
             context.addDiag(diag::InstanceNameRequired, syntax.sourceRange());
@@ -103,6 +105,7 @@ private:
     const SyntaxNode* overrideSyntax;
     SmallVectorBase<const Symbol*>& implicitNets;
     SmallVector<uint32_t> path;
+    SmallVector<int32_t> indices;
     std::span<const AttributeInstanceSyntax* const> attributes;
     bitmask<InstanceFlags> flags;
     uint32_t instanceDepth = 0;
@@ -111,8 +114,20 @@ private:
                            const HierarchyOverrideNode* overrideNode) {
         paramBuilder->setOverrides(overrideNode);
         auto [name, loc] = ast::detail::getNameLoc(syntax);
+        const ModuleDeclarationSyntax* bodyOverride = nullptr;
+        if (auto& callback = comp.getOptions().instanceBodyOverride) {
+            std::string component(name);
+            bool escaped = !name.empty() && (!isValidCIdChar(name.front()) || isDecimalDigit(name.front()));
+            for (size_t i=1;i<name.size();++i)
+                escaped |= !isValidCIdChar(name[i]) && name[i]!='$';
+            if (escaped)
+                component = '\\' + component + ' ';
+            for (auto index : indices)
+                component += '[' + std::to_string(index) + ']';
+            bodyOverride = callback(*definition, *context.scope, component);
+        }
         auto inst = comp.emplace<InstanceSymbol>(comp, name, loc, *definition, *paramBuilder, flags,
-                                                 instanceDepth);
+                                                 instanceDepth, bodyOverride);
         inst->arrayPath = path.copy(comp);
         inst->setSyntax(syntax);
         inst->setAttributes(*context.scope, attributes);
@@ -168,7 +183,9 @@ private:
             }
 
             path.push_back(i);
+            indices.push_back(int32_t(i) + range.lower());
             auto symbol = recurse(syntax, childOverrides, it, end);
+            indices.pop_back();
             path.pop_back();
 
             symbol->name = "";
@@ -363,10 +380,11 @@ InstanceSymbol::InstanceSymbol(std::string_view name, SourceLocation loc, Instan
 
 InstanceSymbol::InstanceSymbol(Compilation& compilation, std::string_view name, SourceLocation loc,
                                const DefinitionSymbol& definition, ParameterBuilder& paramBuilder,
-                               bitmask<InstanceFlags> flags, uint32_t instanceDepth) :
+                               bitmask<InstanceFlags> flags, uint32_t instanceDepth,
+                               const syntax::ModuleDeclarationSyntax* bodyOverride) :
     InstanceSymbol(name, loc,
                    InstanceBodySymbol::fromDefinition(compilation, definition, loc, paramBuilder,
-                                                      flags),
+                                                      flags, bodyOverride),
                    instanceDepth) {
 }
 
@@ -1246,11 +1264,14 @@ InstanceBodySymbol& InstanceBodySymbol::fromDefinition(Compilation& comp,
                                                        const DefinitionSymbol& definition,
                                                        SourceLocation instanceLoc,
                                                        ParameterBuilder& paramBuilder,
-                                                       bitmask<InstanceFlags> flags) {
+                                                       bitmask<InstanceFlags> flags,
+                                                       const syntax::ModuleDeclarationSyntax* bodyOverride) {
     auto overrideNode = paramBuilder.getOverrides();
+    if (bodyOverride)
+        flags |= InstanceFlags::BodyOverride;
     auto result = comp.emplace<InstanceBodySymbol>(comp, definition, overrideNode, flags);
 
-    auto& declSyntax = definition.getSyntax()->as<ModuleDeclarationSyntax>();
+    auto& declSyntax = bodyOverride ? *bodyOverride : definition.getSyntax()->as<ModuleDeclarationSyntax>();
     result->setSyntax(declSyntax);
 
     // Package imports from the header always come first.
@@ -1270,8 +1291,9 @@ InstanceBodySymbol& InstanceBodySymbol::fromDefinition(Compilation& comp,
         paramIt++;
     }
 
-    if (definition.portList)
-        result->addMembers(*definition.portList);
+    auto* ports = bodyOverride ? declSyntax.header->ports : definition.portList;
+    if (ports)
+        result->addMembers(*ports);
 
     // Finally add members from the body.
     for (auto member : declSyntax.members) {
@@ -1305,7 +1327,7 @@ InstanceBodySymbol& InstanceBodySymbol::fromDefinition(Compilation& comp,
     }
 
     // Make note of any bind directives targeting this instance.
-    if (overrideNode) {
+    if (overrideNode && !bodyOverride) {
         for (auto& [bindInfo, targetDefSyntax] : overrideNode->binds) {
             if (targetDefSyntax) {
                 auto def = comp.getDefinition(*result,
@@ -1323,7 +1345,7 @@ InstanceBodySymbol& InstanceBodySymbol::fromDefinition(Compilation& comp,
         }
     }
 
-    if (!definition.bindDirectives.empty()) {
+    if (!bodyOverride && !definition.bindDirectives.empty()) {
         result->setNeedElaboration();
         result->flags |= InstanceFlags::TargetedByBind;
         comp.noteInstanceWithDefBind(*result);

@@ -340,7 +340,8 @@ bool ValueExpressionBase::checkLValue(const ASTContext& context, const ValueSymb
                 return reportErr(diag::ClockVarSyncDrive);
         }
 
-        if (flags.has(AssignFlags::InOutPort))
+        if (flags.has(AssignFlags::InOutPort) &&
+            !context.getCompilation().hasFlag(CompilationFlags::AllowVariableInOutConnections))
             return reportErr(diag::InOutVarPortConn);
     }
     else if (symbol.kind == SymbolKind::ModportPort) {
@@ -525,6 +526,11 @@ HierarchicalValueExpression::HierarchicalValueExpression(const Scope& scope,
 }
 
 ConstantValue HierarchicalValueExpression::evalImpl(EvalContext& context) const {
+    // Script evaluators provide runtime values through the local-value table.
+    if (context.flags.has(EvalFlags::IsScript) && symbol.kind != SymbolKind::Parameter &&
+        symbol.kind != SymbolKind::EnumValue && symbol.kind != SymbolKind::Specparam)
+        if (auto* value = context.findLocal(&symbol))
+            return *value;
     if (!ref.isViaIfacePort() &&
         !context.getCompilation().hasFlag(CompilationFlags::AllowHierarchicalConst) &&
         !context.astCtx.flags.has(ASTFlags::ConfigParam)) {

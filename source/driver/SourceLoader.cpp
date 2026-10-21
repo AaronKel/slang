@@ -8,6 +8,7 @@
 #include "slang/driver/SourceLoader.h"
 
 #include <fmt/format.h>
+#include <algorithm>
 #include <iterator>
 
 #include "slang/parsing/Preprocessor.h"
@@ -96,12 +97,26 @@ void SourceLoader::addSeparateUnit(std::span<const std::string> filePatterns,
                                    const std::vector<std::string>& includePaths,
                                    std::vector<std::string> defines, const std::string& libraryName,
                                    std::vector<std::string> warningOptions) {
+    addSeparateUnit({}, filePatterns, includePaths, std::move(defines), libraryName,
+                    std::move(warningOptions));
+}
+
+void SourceLoader::addSeparateUnit(std::string_view groupName,
+                                   std::span<const std::string> filePatterns,
+                                   const std::vector<std::string>& includePaths,
+                                   std::vector<std::string> defines, const std::string& libraryName,
+                                   std::vector<std::string> warningOptions) {
     std::error_code ec;
     SmallVector<fs::path> includeDirs;
     for (auto& str : includePaths)
         svGlob({}, str, GlobMode::Directories, includeDirs, /* expandEnvVars */ false, ec);
 
-    auto& unit = unitEntries.emplace_back();
+    UnitEntry* existing = nullptr;
+    if (!groupName.empty())
+        for (auto& candidate : unitEntries)
+            if (candidate.groupName == groupName) { existing = &candidate; break; }
+    auto& unit = existing ? *existing : unitEntries.emplace_back();
+    unit.groupName = groupName;
     unit.defines = std::move(defines);
     unit.warningOptions = std::move(warningOptions);
     unit.library = getOrAddLibrary(libraryName);
@@ -539,6 +554,19 @@ void SourceLoader::addFilesInternal(std::string_view pattern, const fs::path& ba
             fileEntries.emplace_back(std::move(path), isLibraryFile, library, unit, rank);
         }
         else {
+            if (unit && !unit->groupName.empty()) {
+                // Named analysis groups are explicit repeated analyses. A file
+                // can be compiled into several libraries, while re-analysis in
+                // the same library replaces its previous compilation unit.
+                auto existing = std::find_if(fileEntries.begin(), fileEntries.end(),
+                    [&](auto& candidate) { return candidate.path == path && candidate.library == library; });
+                if (existing != fileEntries.end()) {
+                    existing->unit = unit;
+                    existing->isLibraryFile &= isLibraryFile;
+                }
+                else fileEntries.emplace_back(std::move(path), isLibraryFile, library, unit, rank);
+                continue;
+            }
             // If this file is supposed to be in a separate unit but is already
             // included elsewhere we should error.
             auto& entry = fileEntries[it->second];

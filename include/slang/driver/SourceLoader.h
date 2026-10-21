@@ -141,6 +141,13 @@ public:
                          std::vector<std::string> defines, const std::string& libraryName,
                          std::vector<std::string> warningOptions);
 
+    /// Adds files to a named compilation unit, extending an existing group
+    /// when the same nonempty group name is supplied again.
+    void addSeparateUnit(std::string_view groupName, std::span<const std::string> filePatterns,
+                         const std::vector<std::string>& includePaths,
+                         std::vector<std::string> defines, const std::string& libraryName,
+                         std::vector<std::string> warningOptions);
+
     /// Returns a list of all library map syntax trees that have been loaded and parsed.
     const SyntaxTreeList& getLibraryMaps() const { return libraryMapTrees; }
 
@@ -187,6 +194,7 @@ private:
     // One entry per unit of files + options to compile them.
     // Only used for addSeparateUnit.
     struct UnitEntry {
+        std::string groupName;
         std::vector<std::filesystem::path> includePaths;
         std::vector<std::string> defines;
         std::vector<std::string> warningOptions;

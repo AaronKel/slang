@@ -57,10 +57,13 @@ enum class SLANG_EXPORT InstanceFlags : uint8_t {
     /// The instance is the target of a bind instantiation.
     TargetedByBind = 1 << 3,
 
+    /// The body syntax was substituted for this particular instance.
+    BodyOverride = 1 << 4,
+
     /// Flags that prevent caching of this instance in the elaboration cache.
-    PreventsCaching = Uninstantiated | FromBind | ParentFromBind
+    PreventsCaching = Uninstantiated | FromBind | ParentFromBind | BodyOverride
 };
-SLANG_BITMASK(InstanceFlags, TargetedByBind)
+SLANG_BITMASK(InstanceFlags, BodyOverride)
 
 /// Common functionality for module, interface, program, and primitive instances.
 class SLANG_EXPORT InstanceSymbolBase : public Symbol {
@@ -106,7 +109,8 @@ public:
 
     InstanceSymbol(Compilation& compilation, std::string_view name, SourceLocation loc,
                    const DefinitionSymbol& definition, ParameterBuilder& paramBuilder,
-                   bitmask<InstanceFlags> flags, uint32_t instanceDepth);
+                   bitmask<InstanceFlags> flags, uint32_t instanceDepth,
+                   const syntax::ModuleDeclarationSyntax* bodyOverride = nullptr);
 
     const DefinitionSymbol& getDefinition() const;
     bool isModule() const;
@@ -217,7 +221,8 @@ public:
                                               const DefinitionSymbol& definition,
                                               SourceLocation instanceLoc,
                                               ParameterBuilder& paramBuilder,
-                                              bitmask<InstanceFlags> flags);
+                                              bitmask<InstanceFlags> flags,
+                                              const syntax::ModuleDeclarationSyntax* bodyOverride = nullptr);
 
     void serializeTo(ASTSerializer& serializer) const;
 

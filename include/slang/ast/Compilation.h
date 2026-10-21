@@ -7,6 +7,7 @@
 //------------------------------------------------------------------------------
 #pragma once
 
+#include <functional>
 #include <memory>
 
 #include "slang/ast/ASTDiagMap.h"
@@ -150,8 +151,12 @@ enum class SLANG_EXPORT CompilationFlags {
     /// (untaken generate branches and uninstantiated module instances) so that
     /// additional lints, like port and parameter name checks, can run on it.
     CheckUninstantiated = 1 << 21,
+
+    /// Allow variable actuals on inout ports for formal-tool interoperability.
+    /// The consumer must provide the corresponding electrical alias model.
+    AllowVariableInOutConnections = 1 << 22,
 };
-SLANG_BITMASK(CompilationFlags, CheckUninstantiated)
+SLANG_BITMASK(CompilationFlags, AllowVariableInOutConnections)
 
 /// Contains various options that can control compilation behavior.
 struct SLANG_EXPORT CompilationOptions {
@@ -240,6 +245,13 @@ struct SLANG_EXPORT CompilationOptions {
     /// A list of library names, in the order in which they should be searched
     /// when binding cells to instances.
     std::vector<std::string> defaultLiblist;
+
+    /// Optionally substitute the body syntax of a specific child instance.
+    /// The declaration's identity and parameter bindings remain unchanged.
+    /// Original definition and hierarchy binds are not applied to replacements.
+    /// The caller owns returned syntax for the lifetime of the compilation.
+    std::function<const syntax::ModuleDeclarationSyntax*(
+        const DefinitionSymbol&, const Scope&, std::string_view)> instanceBodyOverride;
 };
 
 /// Information about how a bind directive applies to some definition
