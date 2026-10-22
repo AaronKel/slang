@@ -3,6 +3,7 @@
 
 #include "TidyConfigParser.h"
 
+#include "TidyFactory.h"
 #include "fmt/format.h"
 #include <fstream>
 
@@ -21,7 +22,9 @@ inline constexpr bool is_vector_v = is_vector<T>::value;
 TidyConfigParser::TidyConfigParser(const std::filesystem::path& path) {
     parserState = ParserState::Initial;
     filePath = path.string();
-    fileStream << std::ifstream(filePath).rdbuf();
+    std::stringstream content;
+    content << std::ifstream(filePath).rdbuf();
+    fileStream.str(stripComments(content.str()));
     line = 0;
     col = 0;
     parseFile();
@@ -30,10 +33,34 @@ TidyConfigParser::TidyConfigParser(const std::filesystem::path& path) {
 TidyConfigParser::TidyConfigParser(const std::string& config) {
     parserState = ParserState::Initial;
     filePath = "raw-string";
-    fileStream.str(config);
+    fileStream.str(stripComments(config));
     line = 0;
     col = 0;
     parseFile();
+}
+
+std::string TidyConfigParser::stripComments(std::string_view config) {
+    std::string result;
+    bool inComment = false;
+    bool inQuotes = false;
+    for (char c : config) {
+        if (c == '\n' || c == '\r') {
+            inComment = false;
+            inQuotes = false;
+        }
+        else if (inComment) {
+            continue;
+        }
+        else if (c == '"') {
+            inQuotes = !inQuotes;
+        }
+        else if (c == '#' && !inQuotes) {
+            inComment = true;
+            continue;
+        }
+        result += c;
+    }
+    return result;
 }
 
 char TidyConfigParser::nextChar() {
@@ -108,6 +135,12 @@ void TidyConfigParser::parseFile() {
 }
 
 void TidyConfigParser::parseInitial() {
+    // Skip blank lines (e.g. left by comments) before a section
+    while (peekChar() == '\n')
+        nextChar();
+    if (fileStream.eof())
+        return;
+
     char currentChar = peekChar();
     if (currentChar == 0)
         reportErrorAndExit("Unexpected end of file");
@@ -312,9 +345,11 @@ void TidyConfigParser::parseChecks() {
 
 void TidyConfigParser::parseCheckConfigs() {
     while (!fileStream.eof()) {
-        // Parse optional newline
-        if (peekChar() == '\n')
+        // Parse optional newlines
+        while (peekChar() == '\n')
             nextChar();
+        if (fileStream.eof())
+            return;
 
         // Parse option name
         std::string optionName;
@@ -422,11 +457,21 @@ void TidyConfigParser::toggleCheck(const std::string& groupName, const std::stri
     auto kind = slang::tidyKindFromStr(groupName);
     if (!kind)
         reportErrorAndExit(fmt::format("Group {} does not exist", groupName));
-    bool found = config.toggleCheck(kind.value(), formatCheckName(checkName), status, severity);
+    auto name = resolveCheckName(checkName);
+    bool found = !name.empty() && config.toggleCheck(kind.value(), name, status, severity);
 
-    if (!found)
+    if (!found) {
         reportWarning(
             fmt::format("Check name {} does not exist in group {}", checkName, groupName));
+        return;
+    }
+
+    auto lowerName = checkName;
+    std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+    if (auto canonical = unformatCheckName(name); lowerName != canonical) {
+        reportWarning(fmt::format("Check name {0}-{1} is deprecated, use {0}-{2} instead",
+                                  groupName, checkName, canonical));
+    }
 }
 
 void TidyConfigParser::parseConfigValue(std::string& config, std::string&& configValue) {
@@ -483,58 +528,38 @@ void TidyConfigParser::reportWarning(const std::string& str) const {
                                  filePath, line, col, str));
 }
 
-std::string TidyConfigParser::formatCheckName(const std::string& checkName) {
-    if (checkName.empty())
-        return "";
-    std::string capitalizedName;
-    capitalizedName.resize(checkName.size());
-    std::transform(checkName.begin(), checkName.end(), capitalizedName.begin(), ::tolower);
-    // Input string is expected to have the format a-b-c-d-e...
-    // Capitalize the first letter
-    capitalizedName[0] = static_cast<char>(::toupper(capitalizedName[0]));
-    if (std::count(capitalizedName.begin(), capitalizedName.end(), '-') == 0) {
-        // If there are no '-' on the name, we are done
-        return capitalizedName;
-    }
-
-    // Find all the '-' and capitalize the following char if exists
-    auto nameLength = checkName.size();
-    size_t pos = 0;
-    while (true) {
-        pos = capitalizedName.find('-', pos);
-        // If pos+1 does not exist, or we have not found anymore '-' we can break.
-        // Else capitalize the pos+1 letter
-        if (pos == std::string::npos || nameLength <= pos)
-            break;
-        else {
-            capitalizedName[pos + 1] = static_cast<char>(::toupper(capitalizedName[pos + 1]));
-            pos += 1;
+std::string TidyConfigParser::resolveCheckName(const std::string& checkName) {
+    auto normalize = [](const std::string& name) {
+        std::string result;
+        for (char ch : name) {
+            if (ch != '-')
+                result += static_cast<char>(::tolower(ch));
         }
-    }
+        return result;
+    };
 
-    // At this point the string should have the format Aa-Bb-Cc-....
-    // Remove the '-' from the string and we are done
-    size_t currentPos = 0;
-    size_t nextPos = capitalizedName.find('-');
-    std::string name;
-    while (nextPos != std::string::npos) {
-        name.append(capitalizedName.substr(currentPos, nextPos - currentPos));
-        currentPos = nextPos + 1;
-        nextPos = capitalizedName.find('-', currentPos);
+    auto key = normalize(checkName);
+    for (const auto& name : Registry::getRegisteredChecks()) {
+        if (normalize(name) == key)
+            return name;
     }
-    name.append(capitalizedName.substr(currentPos));
-    return name;
+    return "";
 }
 
 std::string TidyConfigParser::unformatCheckName(const std::string& name) {
     std::string result;
 
-    for (char ch : name) {
+    for (size_t i = 0; i < name.size(); i++) {
+        char ch = name[i];
         if (std::isupper(ch)) {
-            if (!result.empty()) {
+            // Start a new word at each capital letter, except inside an acronym:
+            // AlwaysFFBlocking is always-ff-blocking and OnlyANSIPortDecl is
+            // only-ansi-port-decl.
+            bool prevUpper = i > 0 && std::isupper(name[i - 1]);
+            bool nextLower = i + 1 < name.size() && std::islower(name[i + 1]);
+            if (!result.empty() && (!prevUpper || nextLower))
                 result += '-';
-            }
-            result += std::tolower(ch);
+            result += static_cast<char>(std::tolower(ch));
         }
         else {
             result += ch;

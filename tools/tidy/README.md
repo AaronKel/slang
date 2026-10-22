@@ -35,6 +35,8 @@ END                   ::= EOL* | EOF
 
 The syntax of the `.slang-tidy` file is similar to the syntax of the `.clang-tidy`. There are two main
 sections: `Checks` and `CheckConfigs`, that can appear as many times as needed in the config file.
+Comments start with `#` and extend to the end of the line, so a check can be commented out or a
+setting explained in place.
 
 The `Checks` section is a comma separated list of globs with an optional `-` prefix, that will enable or disable
 the specified check or group of checks.
@@ -54,8 +56,11 @@ Disable all: -*
 ```
 
 Each check identifier is composed of a group name, eg `style`, followed by a
-hyphen `-` and the check name in lower case with hyphens. See the output of
-`--print-descriptions` to see the available checks and their config keys.
+hyphen `-` and the check name in lower case with hyphens, keeping acronyms as
+one word (eg `style-always-ff-blocking` for `AlwaysFFBlocking`). See the output of
+`--print-descriptions` to see the available checks and their config keys. The
+spelling with acronyms split letter by letter used by older versions (eg
+`style-always-f-f-blocking`) is still accepted, with a warning.
 
 Additionally, each check or group of checks can specify a severity level that
 diagnostics are reported with. These levels are `ignore`, `info`, `warning`,
@@ -102,13 +107,14 @@ An example of a possible configuration file:
 Checks:
     -*,
     synthesis-only-assigned-on-reset,
+    # synthesis-register-has-no-reset,
     style-enforce-port-suffix
 
 CheckConfigs:
     clkName: clk,
     clkNameRegexString: "clk_signal\S*|clock_port\S*",
     resetName: rst_i,
-    resetIsActiveHigh: true,
+    resetIsActiveHigh: true, # rst_i is active high
     inputPortSuffix: _k,
     outputPortSuffix: _p
 ```
