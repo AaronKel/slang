@@ -147,7 +147,9 @@ public:
                         break;
                     }
                     case SyntaxKind::ResetAllDirective:
-                        defaultNetType = TokenKind::Unknown;
+                        // Like the preprocessor: `resetall restores wire;
+                        // Unknown denotes `default_nettype none.
+                        defaultNetType = TokenKind::WireKeyword;
                         unconnectedDrive = TokenKind::Unknown;
                         cellDefine = false;
                         timeScale = {};
@@ -161,7 +163,8 @@ public:
 
 private:
     SmallVector<flat_hash_set<std::string_view>, 4> moduleDeclStack;
-    TokenKind defaultNetType = TokenKind::Unknown;
+    // A rewritten tree starts from the preprocessor's initial state.
+    TokenKind defaultNetType = TokenKind::WireKeyword;
     TokenKind unconnectedDrive = TokenKind::Unknown;
     bool cellDefine = false;
     std::optional<TimeScale> timeScale;
