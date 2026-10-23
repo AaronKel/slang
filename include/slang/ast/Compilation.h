@@ -151,12 +151,8 @@ enum class SLANG_EXPORT CompilationFlags {
     /// (untaken generate branches and uninstantiated module instances) so that
     /// additional lints, like port and parameter name checks, can run on it.
     CheckUninstantiated = 1 << 21,
-
-    /// Allow variable actuals on inout ports for formal-tool interoperability.
-    /// The consumer must provide the corresponding electrical alias model.
-    AllowVariableInOutConnections = 1 << 22,
 };
-SLANG_BITMASK(CompilationFlags, AllowVariableInOutConnections)
+SLANG_BITMASK(CompilationFlags, CheckUninstantiated)
 
 /// Contains various options that can control compilation behavior.
 struct SLANG_EXPORT CompilationOptions {

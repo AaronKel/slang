@@ -340,8 +340,7 @@ bool ValueExpressionBase::checkLValue(const ASTContext& context, const ValueSymb
                 return reportErr(diag::ClockVarSyncDrive);
         }
 
-        if (flags.has(AssignFlags::InOutPort) &&
-            !context.getCompilation().hasFlag(CompilationFlags::AllowVariableInOutConnections))
+        if (flags.has(AssignFlags::InOutPort))
             return reportErr(diag::InOutVarPortConn);
     }
     else if (symbol.kind == SymbolKind::ModportPort) {
@@ -936,7 +935,11 @@ Expression& AssertionInstanceExpression::fromLookup(const Symbol& symbol,
             instance.isRecursive = true;
         }
 
-        if (currInst->argDetails)
+        // An argument expansion continues in the context where the actual
+        // argument was written. An actual written outside any instance is not
+        // nested in the instance expanding it, so it ends the search: in
+        // p(a, p(b, c)) the inner p is no recursive instance of the outer one.
+        if (currInst->argDetails || currInst->argExpansionLoc)
             currInst = currInst->argDetails;
         else {
             SLANG_ASSERT(currInst->prevContext);
