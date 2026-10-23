@@ -1293,3 +1293,47 @@ TEST_CASE("Visit all file") {
     compilation.freeze();
     analysisManager.analyze(compilation);
 }
+
+TEST_CASE("Syntax rewriting keeps the default net type") {
+    // Without a `default_nettype directive, and after `resetall, implicit
+    // nets are wires (IEEE 1800-2017 22.8), also in a rewritten tree.
+    auto tree = SyntaxTree::fromText(R"(
+module m(input a, output b);
+    assign w = a;
+    assign b = w;
+endmodule
+
+`default_nettype none
+`resetall
+module n(input a, output b);
+    assign v = a;
+    assign b = v;
+endmodule
+)");
+    CHECK(tree->diagnostics().empty());
+
+    class Renamer : public SyntaxRewriter<Renamer> {
+    public:
+        void handle(const ModuleDeclarationSyntax& syntax) {
+            auto newMod = clone(syntax, alloc);
+            newMod->header->name = makeId(syntax.header->name.valueText() == "m" ? "m2" : "n2",
+                                          SingleSpace);
+            replace(syntax, *newMod);
+        }
+    };
+
+    auto newTree = Renamer().transform(tree);
+    auto& meta = newTree->getMetadata();
+    CHECK(meta.nodeMeta.size() == 2);
+    for (auto& [key, node] : meta.nodeMeta)
+        CHECK(node.defaultNetType == TokenKind::WireKeyword);
+
+    // Both modules create their implicit nets instead of reporting them.
+    Compilation compilation;
+    compilation.addSyntaxTree(newTree);
+    auto& diags = compilation.getAllDiagnostics();
+    INFO(report(diags));
+    REQUIRE(diags.size() == 2);
+    CHECK(diags[0].code == diag::ImplicitNet);
+    CHECK(diags[1].code == diag::ImplicitNet);
+}
